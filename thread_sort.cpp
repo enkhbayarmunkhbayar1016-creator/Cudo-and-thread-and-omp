@@ -1,8 +1,6 @@
 #include <iostream>
 #include <vector>
 #include <thread>
-#include <mutex>
-#include <condition_variable>
 #include <random>
 #include <chrono>
 #include <fstream>
@@ -14,56 +12,44 @@
 using namespace std;
 using namespace std::chrono;
 
-// Thread-үүдийг pass бүрийн хооронд синхрончлох barrier
-class Barrier {
-    int count, total;
-    mutex mtx;
-    condition_variable cv;
-    int generation = 0;
-public:
-    Barrier(int n) : count(n), total(n) {}
-    void arrive_and_wait() {
-        unique_lock<mutex> lock(mtx);
-        int gen = generation;
-        if (--count == 0) {
-            count = total;
-            generation++;
-            cv.notify_all();
-        } else {
-            cv.wait(lock, [&]{ return gen != generation; });
+void bubbleSortChunk(vector<int>& arr, int left, int right) {
+    for (int i = left; i < right - 1; i++) {
+        for (int j = left; j < right - 1 - (i - left); j++) {
+            if (arr[j] > arr[j + 1])
+                swap(arr[j], arr[j + 1]);
         }
-    }
-};
-
-// Odd-Even Transposition Sort: pass бүрд thread-ууд хамтдаа ажиллана
-void threadWorker(vector<int>& arr, int id, int numThreads, int n, Barrier& bar) {
-    for (int pass = 0; pass < n; pass++) {
-        int phase = pass % 2; // 0=even pairs, 1=odd pairs
-        int numPairs = (n - phase) / 2;
-        int chunk = (numPairs + numThreads - 1) / numThreads;
-        int from = id * chunk;
-        int to = min(from + chunk, numPairs);
-
-        for (int i = from; i < to; i++) {
-            int idx = phase + 2 * i;
-            if (idx + 1 < n && arr[idx] > arr[idx + 1])
-                swap(arr[idx], arr[idx + 1]);
-        }
-        bar.arrive_and_wait(); // бүх thread pass дуустал хүлээнэ
     }
 }
 
 double parallelSort(vector<int>& arr, int numThreads) {
     int n = arr.size();
-    Barrier bar(numThreads);
+    int chunk = (n + numThreads - 1) / numThreads;
     vector<thread> threads;
 
     auto start = high_resolution_clock::now();
-    for (int t = 0; t < numThreads; t++)
-        threads.emplace_back(threadWorker, ref(arr), t, numThreads, n, ref(bar));
-    for (auto& t : threads) t.join();
-    auto end = high_resolution_clock::now();
 
+    // Thread бүр өөрийн хэсгийг bubble sort хийнэ
+    for (int t = 0; t < numThreads; t++) {
+        int left = t * chunk;
+        int right = min(left + chunk, n);
+        if (left >= n) break;
+        threads.emplace_back(bubbleSortChunk, ref(arr), left, right);
+    }
+    for (auto& t : threads) t.join();
+
+    // Sorted chunk-уудыг merge хийнэ
+    int width = chunk;
+    while (width < n) {
+        for (int left = 0; left < n; left += 2 * width) {
+            int mid = min(left + width, n);
+            int right = min(left + 2 * width, n);
+            if (mid < right)
+                inplace_merge(arr.begin() + left, arr.begin() + mid, arr.begin() + right);
+        }
+        width *= 2;
+    }
+
+    auto end = high_resolution_clock::now();
     return duration<double, milli>(end - start).count();
 }
 
@@ -93,7 +79,7 @@ int main() {
     int numThreads = max(2, (int)thread::hardware_concurrency());
 
     remove("results_thread.json");
-    cerr << "std::thread | " << numThreads << " threads" << endl;
+    cerr << "std::thread Bubble Sort | " << numThreads << " threads" << endl;
 
     for (int n : testSizes) {
         vector<int> arr(n);

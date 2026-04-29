@@ -54,17 +54,22 @@ def read_json(path):
 
 # ── O(N²) prediction ───────────────────────────────────────────────────────────
 def predict_n2(results, target_n):
-    ns    = sorted(results.keys())
-    times = [results[n]["time_ms"] for n in ns]
-    if len(ns) < 1:
+    ns = sorted(results.keys())
+    if not ns:
         return None
-    log_ns = np.log(ns)
-    log_ts = np.log(times)
+    times = [results[n]["time_ms"] for n in ns]
     if len(ns) == 1:
         c = times[0] / (ns[0] ** 2)
         return c * target_n ** 2
+    log_ns = np.log(ns)
+    log_ts = np.log(times)
     coeffs = np.polyfit(log_ns, log_ts, 1)
-    exp, log_c = coeffs
+    # Odd-Even Sort is O(N²) regardless of parallelism — exponent cannot be below 2.
+    # A fitted exp < 2 means small-N overhead (barriers, thread spawn) pulled the curve
+    # down, which causes massive underestimation at N=1M.  Clamp and re-anchor the
+    # constant from the largest (most representative) data point.
+    exp = max(2.0, coeffs[0])
+    log_c = log_ts[-1] - exp * log_ns[-1]
     return np.exp(log_c) * (target_n ** exp)
 
 def fmt_time(ms):
@@ -272,7 +277,9 @@ def draw_prediction(ax, all_res):
             ts_curve = c * ns_plot ** 2
         else:
             coeffs = np.polyfit(log_ns, log_ts, 1)
-            ts_curve = np.exp(coeffs[1]) * ns_plot ** coeffs[0]
+            exp_c = max(2.0, coeffs[0])
+            log_c = log_ts[-1] - exp_c * log_ns[-1]
+            ts_curve = np.exp(log_c) * ns_plot ** exp_c
         ax.plot(ns_plot, ts_curve, color=ver["color"], lw=2, alpha=0.85, label=ver["name"])
         ax.scatter(ns_known, ts_known, color=ver["color"], s=50, zorder=5)
 
@@ -331,7 +338,12 @@ def draw_speedup(ax, all_res):
 # ── Animation update ───────────────────────────────────────────────────────────
 def update(frame):
     for i, ver in enumerate(VERSIONS):
-        all_results[i] = read_json(ver["json"])
+        # Only read results for versions the runner has already started.
+        # Always read CUDA (exe is None) because it is pre-loaded, never run.
+        if ver["exe"] is None or i <= current_ver[0]:
+            all_results[i] = read_json(ver["json"])
+        else:
+            all_results[i] = {}
     for i in range(4):
         draw_progress(ax_prog[i], i, all_results[i])
     draw_table(ax_table, all_results)

@@ -12,30 +12,39 @@
 using namespace std;
 using namespace std::chrono;
 
-// OpenMP Odd-Even Transposition Sort
-// #pragma omp parallel for → pass бүрд бүх thread хамтдаа ажиллана
 double parallelSort(vector<int>& arr, long long& comparisons) {
     int n = arr.size();
     comparisons = 0;
+    int numThreads = omp_get_max_threads();
+    int chunk = (n + numThreads - 1) / numThreads;
 
     auto start = high_resolution_clock::now();
 
-    for (int pass = 0; pass < n; pass++) {
-        int phase = pass % 2;
-        int numPairs = (n - phase) / 2;
-
-        long long localComps = 0;
-
-        #pragma omp parallel for schedule(static) reduction(+:localComps)
-        for (int i = 0; i < numPairs; i++) {
-            int idx = phase + 2 * i;
-            if (idx + 1 < n) {
-                localComps++;
-                if (arr[idx] > arr[idx + 1])
-                    swap(arr[idx], arr[idx + 1]);
+    // Thread бүр өөрийн хэсгийг bubble sort хийнэ
+    #pragma omp parallel reduction(+:comparisons)
+    {
+        int t = omp_get_thread_num();
+        int left = t * chunk;
+        int right = min(left + chunk, n);
+        for (int i = left; i < right - 1; i++) {
+            for (int j = left; j < right - 1 - (i - left); j++) {
+                comparisons++;
+                if (arr[j] > arr[j + 1])
+                    swap(arr[j], arr[j + 1]);
             }
         }
-        comparisons += localComps;
+    }
+
+    // Sorted chunk-уудыг merge хийнэ
+    int width = chunk;
+    while (width < n) {
+        for (int left = 0; left < n; left += 2 * width) {
+            int mid = min(left + width, n);
+            int right = min(left + 2 * width, n);
+            if (mid < right)
+                inplace_merge(arr.begin() + left, arr.begin() + mid, arr.begin() + right);
+        }
+        width *= 2;
     }
 
     auto end = high_resolution_clock::now();
@@ -68,7 +77,7 @@ int main() {
     int numThreads = omp_get_max_threads();
 
     remove("results_openmp.json");
-    cerr << "OpenMP | " << numThreads << " threads" << endl;
+    cerr << "OpenMP Bubble Sort | " << numThreads << " threads" << endl;
 
     for (int n : testSizes) {
         vector<int> arr(n);
